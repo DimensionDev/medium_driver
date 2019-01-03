@@ -2,37 +2,76 @@ __site_url__ = 'https://medium.com'
 __base_url__ = 'https://api.medium.com/v1'
 
 from metadrive._requests import get_session
+from metadrive._bs4 import get_soup
+
 from metadrive import utils
-import bs4
+from metadrive.auth import RequestsCookieAuthentication
 
-def login(raw_cookie=None):
+import json
+from urllib.parse import urljoin
 
-    requests = get_session()
 
-    if raw_cookie is not None:
-        requests.headers.update({
-            'content-type':'text/plain',
-            'cookie': raw_cookie
-        })
-
-    return requests
-
+def login(raw_cookie=None, key_name='medium'):
+    session = RequestsCookieAuthentication(raw_cookie, key_name).authenticate()
+    return session
 
 def harvest(query=None, limit=None):
 
-    requests = login()
+    # url = 'https://medium.com/mit-technology-review/the-biggest-technology-failures-of-2018-52eaf050751a'
+    # body = soup.find('main', {'role': 'main'}).text
 
-    url = 'https://medium.com/mit-technology-review/the-biggest-technology-failures-of-2018-52eaf050751a'
+    anonymous_session = get_session()
+    private_session = login(key_name='medium-lys')
+    private_limit = 50
 
-    response = requests.get(url)
+    categories = get_soup(urljoin(__site_url__, 'topics'), anonymous_session)
 
-    if response.ok:
-        data = response.content
-        soup = bs4.BeautifulSoup(data, 'html.parser')
+    items = []
 
-        body = soup.find('main', {'role': 'main'}).text
+    # getting items
+    for category in categories.find_all('a', {'class': 'u-backgroundCover'}):
+        print('|', end='')
+        soup = get_soup(category.attrs['href'])
 
-        yield {
-            'body': body,
-            '-': url
-        }
+        for article in soup.find_all("a", href=lambda href: href and href.startswith('/p/')):
+
+            item = {
+                'name': article.text,
+                'url': article.attrs['href'],
+                'category': {
+                    'name': category.text,
+                    'url': category.attrs['href']}}
+
+            items.append(item)
+
+    # updating items
+    for i, item in enumerate(items):
+        print('.', end='')
+        info = {'status': 'ok'}
+
+        soup = get_soup(item['url'], anonymous_session)
+
+        paywalled = soup.find('div', {'class':'postFade uiScale uiScale-ui--regular uiScale-caption--regular js-regwall'})
+
+        if paywalled:
+            if private_limit > 0:
+
+                soup = get_soup(item['url'], private_session)
+                private_limit -= 1
+            else:
+                info = {'status': 'run-out-of-personal-limit'}
+
+        items[i].update({'data': repr(soup), 'info': info})
+
+        with open('medium-data.jsonl', 'a') as f:
+            f.write(items[i])
+
+    return items
+
+    # Later refactor to use yield gracefully
+    #
+    # yield {
+    #     'name': topic.text,
+    #     '-': topic.attrs['url']
+    # }
+
