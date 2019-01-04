@@ -5,3 +5,4 @@ data/
 *__pycache__*
 ~/.vscode/
 mediumdb.egg-info/
+mediumdb/.ipynb_checkpoints/
