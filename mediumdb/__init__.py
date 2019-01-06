@@ -1,90 +1,141 @@
 __site_url__ = 'https://medium.com'
 __base_url__ = 'https://api.medium.com/v1'
 
-# from metadrive._selenium import get_driver
-# driver = get_driver(proxies={'socks_proxy': '127.0.0.1:9999'})
-# driver.get(__site_url__)
-# driver.get('https://www.whatismyip.com')
+import urllib
+from tqdm import tqdm
 
 from metadrive._requests import get_session
 from metadrive._bs4 import get_soup
+from metadrive.auth import UserAgents, RequestsCookieAuthentication
 
-from metadrive import utils
-from metadrive.auth import RequestsCookieAuthentication
-
-import json
-from urllib.parse import urljoin
-import time
-
+proxies = {
+    'http': 'socks5h://127.0.0.1:9999',
+    'https': 'socks5h://127.0.0.1:9999'
+}
 
 def login(raw_cookie=None, key_name='medium', proxies=None):
-    return RequestsCookieAuthentication(
-        raw_cookie, key_name).authenticate()
+        return RequestsCookieAuthentication(
+            raw_cookie, key_name).authenticate()
 
-def harvest(query=None, limit=None, proxies=None):
-
-    # url = 'https://medium.com/mit-technology-review/the-biggest-technology-failures-of-2018-52eaf050751a'
-    # body = soup.find('main', {'role': 'main'}).text
-
-    print("Getting anonymous session...")
+def harvest():
     anonymous_session = get_session()
-
-    print("Getting private session...")
-    private_session = login(key_name='medium-lys', proxies=proxies)
+    private_session = login(key_name='medium-lys')
     private_limit = 50
 
-    print("Getting categories... ", end='')
-    categories = get_soup(urljoin(__site_url__, 'topics'), anonymous_session, proxies=proxies)
-    print("done")
-
+    # STEP-1: Get Topic URLs
     items = []
 
-    # getting items
-    print("Getting visitable urls... ")
-    for category in categories.find_all('a', {'class': 'u-backgroundCover'}):
-        print('|', end='')
-        soup = get_soup(category.attrs['href'], anonymous_session, proxies=proxies)
+    categories = get_soup(
+        'https://medium.com/topics',
+        session=anonymous_session,
+        update_headers={'User-Agent': UserAgents.random_android()},
+        proxies=proxies)
 
-        for article in soup.find_all("a", href=lambda href: href and href.startswith('/p/')):
+    for category in tqdm(categories.find_all('a', {'class': 'u-backgroundCover'})):
+        category_url = category.attrs['href']
+        category_name = category.attrs['aria-label']
 
-            item = {
-                'name': article.text,
-                'url': article.attrs['href'],
+        articles = get_soup(
+            category_url,
+            session=anonymous_session,
+            update_headers={'User-Agent': UserAgents.random_android()},
+            proxies=proxies
+        )
+
+        for article in articles.find_all("a", href=lambda href: href and href.startswith('/p/')):
+            items.append({
+                'url': urllib.parse.urljoin(__site_url__, article.attrs['href']),
                 'category': {
-                    'name': category.text,
-                    'url': category.attrs['href']}}
+                    'name': category_name,
+                    'url': category_url}})
 
-            items.append(item)
-        time.sleep(1)
+    # PART 2 - Retrieval of details.
+    for i, item in tqdm(enumerate(items)):
 
-    # updating items
-    for i, item in enumerate(items):
-        print('.', end='')
-        info = {'status': 'ok'}
+        soup = get_soup(
+            urllib.parse.urljoin(__site_url__, item['url']),
+            session=private_session,
+            update_headers={'User-Agent': UserAgents.random_android()},
+            proxies=proxies)
 
-        soup = get_soup(item['url'], anonymous_session, proxies=proxies)
-
-        paywalled = soup.find('div', {'class':'postFade uiScale uiScale-ui--regular uiScale-caption--regular js-regwall'})
+        paywalled = soup.find(
+            'div', {
+                'class': 'postFade uiScale uiScale-ui--regular uiScale-caption--regular js-regwall'
+            })
 
         if paywalled:
+            info = {'paywalled': True}
+
             if private_limit > 0:
-
-                soup = get_soup(item['url'], private_session, proxies=proxies)
+                soup = get_soup(
+                    urllib.parse.urljoin(__site_url__, item['url']),
+                    session=private_session,
+                    update_headers={'User-Agent': UserAgents.random_android()},
+                    proxies=proxies)
                 private_limit -= 1
+
+                paywalled = soup.find(
+                    'div', {
+                        'class': 'postFade uiScale uiScale-ui--regular uiScale-caption--regular js-regwall'
+                    })
+
+                if paywalled:
+                    info.update({'solved-by-cookie': False})
+                else:
+                    info.update({'solved-by-cookie': True})
             else:
-                info = {'status': 'run-out-of-personal-limit'}
+                info.update({'solved-by-cookie': False})
+                info.update({'reason': '>50 private uses of private cookie'})
 
-        items[i].update({'data': repr(soup), 'info': info})
+        else:
+            info = {'paywalled': False}
 
-        with open('medium-data.jsonl', 'a') as f:
-            f.write(items[i])
+        # TITLE
+        title = soup.find('h1')
+        if title:
+            title = title.text
 
-    return items
+        # BODY
+        main = soup.find('main', {'role': 'main'})
+        body_html, body_text, sections_with_images = (None, None, None)
+        if main:
+            body_html = '\n'.join([repr(_) for _ in main.find_all('p')])
+            body_text = '\n'.join([_.text for _ in main.find_all('p')])
+            sections = soup.find_all('div', 'section-inner sectionLayout--insetColumn')
+            sections_with_images = []
+            for section in sections:
+                section_images = section.find_all('img', 'graf-image')
+                section_html ='\n'.join([repr(_) for _ in section.find_all('p')])
+                section_text = '\n'.join([_.text for _ in section.find_all('p')])
+                sections_with_images.append(
+                    {'html': section_html,
+                     'text': section_text,
+                     'images': [im.attrs for im in section_images]})
 
-    # Later refactor to use yield gracefully
-    #
-    # yield {
-    #     'name': topic.text,
-    #     '-': topic.attrs['url']
-    # }
+        # IMAGE
+        cover_image = soup.find('meta', {'property': 'og:image'})
+        if cover_image:
+            cover_image_url = cover_image.attrs['content']
+        else:
+            cover_image_url = None
 
+        # AUTHOR
+        author_image = main.find('img', {'class': 'avatar-image'})
+        author_image_url, author_image_link_name = (None, None)
+        if author_image:
+            author_image_url = author_image.attrs['src']
+            author_image_link_name = author_image.attrs['alt']
+
+        items[i].update({
+            'url': urllib.parse.urljoin(__site_url__, items[i]['url']),
+            'title': title,
+            'body_html': body_html,
+            'body_text': body_text,
+            'cover_image_url': cover_image_url,
+            'author_image_url': author_image_url,
+            'author_image_link_name': author_image_link_name,
+            'sections': sections_with_images,
+            'info': info
+        })
+
+        yield items[i]
