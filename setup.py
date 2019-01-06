@@ -2,7 +2,7 @@ from setuptools import find_packages, setup
 
 setup(
     name='mediumdb',
-    version='0.0.2',
+    version='0.0.3',
     description='Medium driver.',
     url='https://github.com/sujitech/medium_driver',
     author='Mindey',
