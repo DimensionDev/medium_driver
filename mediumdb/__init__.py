@@ -43,99 +43,97 @@ def harvest():
         )
 
         for article in articles.find_all("a", href=lambda href: href and href.startswith('/p/')):
-            items.append({
+
+            item = {
                 'url': urllib.parse.urljoin(__site_url__, article.attrs['href']),
                 'category': {
                     'name': category_name,
-                    'url': category_url}})
+                    'url': category_url}}
 
-    # PART 2 - Retrieval of details.
-    for i, item in tqdm(enumerate(items)):
+            soup = get_soup(
+                urllib.parse.urljoin(__site_url__, item['url']),
+                session=private_session,
+                update_headers={'User-Agent': UserAgents.random_android()},
+                proxies=proxies)
 
-        soup = get_soup(
-            urllib.parse.urljoin(__site_url__, item['url']),
-            session=private_session,
-            update_headers={'User-Agent': UserAgents.random_android()},
-            proxies=proxies)
+            paywalled = soup.find(
+                'div', {
+                    'class': 'postFade uiScale uiScale-ui--regular uiScale-caption--regular js-regwall'
+                })
 
-        paywalled = soup.find(
-            'div', {
-                'class': 'postFade uiScale uiScale-ui--regular uiScale-caption--regular js-regwall'
+            if paywalled:
+                info = {'paywalled': True}
+
+                if private_limit > 0:
+                    soup = get_soup(
+                        urllib.parse.urljoin(__site_url__, item['url']),
+                        session=private_session,
+                        update_headers={'User-Agent': UserAgents.random_android()},
+                        proxies=proxies)
+                    private_limit -= 1
+
+                    paywalled = soup.find(
+                        'div', {
+                            'class': 'postFade uiScale uiScale-ui--regular uiScale-caption--regular js-regwall'
+                        })
+
+                    if paywalled:
+                        info.update({'solved-by-cookie': False})
+                    else:
+                        info.update({'solved-by-cookie': True})
+                else:
+                    info.update({'solved-by-cookie': False})
+                    info.update({'reason': '>50 private uses of private cookie'})
+
+            else:
+                info = {'paywalled': False}
+
+            # TITLE
+            title = soup.find('h1')
+            if title:
+                title = title.text
+
+            # BODY
+            main = soup.find('main', {'role': 'main'})
+            body_html, body_text, sections_with_images = (None, None, None)
+            if main:
+                body_html = '\n'.join([repr(_) for _ in main.find_all('p')])
+                body_text = '\n'.join([_.text for _ in main.find_all('p')])
+                sections = soup.find_all('div', 'section-inner sectionLayout--insetColumn')
+                sections_with_images = []
+                for section in sections:
+                    section_images = section.find_all('img', 'graf-image')
+                    section_html ='\n'.join([repr(_) for _ in section.find_all('p')])
+                    section_text = '\n'.join([_.text for _ in section.find_all('p')])
+                    sections_with_images.append(
+                        {'html': section_html,
+                         'text': section_text,
+                         'images': [im.attrs for im in section_images]})
+
+            # IMAGE
+            cover_image = soup.find('meta', {'property': 'og:image'})
+            if cover_image:
+                cover_image_url = cover_image.attrs['content']
+            else:
+                cover_image_url = None
+
+            # AUTHOR
+            author_image = main.find('img', {'class': 'avatar-image'})
+            author_image_url, author_image_link_name = (None, None)
+            if author_image:
+                author_image_url = author_image.attrs['src']
+                author_image_link_name = author_image.attrs['alt']
+
+            item.update({
+                'url': urllib.parse.urljoin(__site_url__, items[i]['url']),
+                'title': title,
+                'body_html': body_html,
+                'body_text': body_text,
+                'cover_image_url': cover_image_url,
+                'author_image_url': author_image_url,
+                'author_image_link_name': author_image_link_name,
+                'sections': sections_with_images,
+                'info': info
             })
 
-        if paywalled:
-            info = {'paywalled': True}
-
-            if private_limit > 0:
-                soup = get_soup(
-                    urllib.parse.urljoin(__site_url__, item['url']),
-                    session=private_session,
-                    update_headers={'User-Agent': UserAgents.random_android()},
-                    proxies=proxies)
-                private_limit -= 1
-
-                paywalled = soup.find(
-                    'div', {
-                        'class': 'postFade uiScale uiScale-ui--regular uiScale-caption--regular js-regwall'
-                    })
-
-                if paywalled:
-                    info.update({'solved-by-cookie': False})
-                else:
-                    info.update({'solved-by-cookie': True})
-            else:
-                info.update({'solved-by-cookie': False})
-                info.update({'reason': '>50 private uses of private cookie'})
-
-        else:
-            info = {'paywalled': False}
-
-        # TITLE
-        title = soup.find('h1')
-        if title:
-            title = title.text
-
-        # BODY
-        main = soup.find('main', {'role': 'main'})
-        body_html, body_text, sections_with_images = (None, None, None)
-        if main:
-            body_html = '\n'.join([repr(_) for _ in main.find_all('p')])
-            body_text = '\n'.join([_.text for _ in main.find_all('p')])
-            sections = soup.find_all('div', 'section-inner sectionLayout--insetColumn')
-            sections_with_images = []
-            for section in sections:
-                section_images = section.find_all('img', 'graf-image')
-                section_html ='\n'.join([repr(_) for _ in section.find_all('p')])
-                section_text = '\n'.join([_.text for _ in section.find_all('p')])
-                sections_with_images.append(
-                    {'html': section_html,
-                     'text': section_text,
-                     'images': [im.attrs for im in section_images]})
-
-        # IMAGE
-        cover_image = soup.find('meta', {'property': 'og:image'})
-        if cover_image:
-            cover_image_url = cover_image.attrs['content']
-        else:
-            cover_image_url = None
-
-        # AUTHOR
-        author_image = main.find('img', {'class': 'avatar-image'})
-        author_image_url, author_image_link_name = (None, None)
-        if author_image:
-            author_image_url = author_image.attrs['src']
-            author_image_link_name = author_image.attrs['alt']
-
-        items[i].update({
-            'url': urllib.parse.urljoin(__site_url__, items[i]['url']),
-            'title': title,
-            'body_html': body_html,
-            'body_text': body_text,
-            'cover_image_url': cover_image_url,
-            'author_image_url': author_image_url,
-            'author_image_link_name': author_image_link_name,
-            'sections': sections_with_images,
-            'info': info
-        })
-
-        yield items[i]
+            yield item
