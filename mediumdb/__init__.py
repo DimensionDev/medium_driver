@@ -20,7 +20,7 @@ def login(raw_cookie=None, key_name='medium', proxies=None):
 def harvest():
     anonymous_session = get_session()
     private_session = login(key_name='medium-lys')
-    private_limit = 50
+    private_limit = 0
 
     # STEP-1: Get Topic URLs
     items = []
@@ -128,6 +128,7 @@ def harvest():
 
         items[i].update({
             'url': urllib.parse.urljoin(__site_url__, items[i]['url']),
+            'raw': repr(soup),
             'title': title,
             'body_html': body_html,
             'body_text': body_text,
